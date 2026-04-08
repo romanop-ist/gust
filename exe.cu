@@ -11,7 +11,7 @@
 #define DISJOINT 0
 #define THREAD_TX_SHIFT 0
 #define KERNEL_DURATION 5
-#define PR_MAX_RWSET_SIZE 6000
+#define PR_MAX_RWSET_SIZE 64
 
 #include "pr-stm.cuh"
 #include "pr-stm-internal.cuh"
