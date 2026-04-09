@@ -80,7 +80,7 @@ PR_DEVICE PR_GRANULE_T PR_i_openReadKernel(
 	k = PR_FIND_IN_RWSET(args->wset, addr);
 	// ------------------------------------------------------------------------
 
-	if (!args->is_abort && (!PR_CHECK_PRELOCK(temp) || PR_GET_OWNER(temp) == args->tid)) {
+	if (!args->is_abort && !PR_CHECK_PRELOCK(temp)) {
 		// ------------------------------------------------------------------------
 		// if (PR_THREAD_IDX == 405) printf("[405] did not abort yet!\n");
 		// not locked
@@ -122,7 +122,7 @@ PR_DEVICE void PR_i_openWriteKernel(
 	int temp, version;
 
 	temp = PR_GET_MTX(args->mtx, addr);
-	if (!args->is_abort && (!PR_CHECK_PRELOCK(temp) || PR_GET_OWNER(temp) == args->tid)) {
+	if (!args->is_abort && !PR_CHECK_PRELOCK(temp)) {
 		// ------------------------------------------------------------------------
 		// // not locked --> safe to access TODO: the rset seems redundant
 		// TODO: non-repeated writes
