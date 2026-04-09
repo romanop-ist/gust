@@ -80,7 +80,7 @@ PR_DEVICE PR_GRANULE_T PR_i_openReadKernel(
 	k = PR_FIND_IN_RWSET(args->wset, addr);
 	// ------------------------------------------------------------------------
 
-	if (!args->is_abort && !PR_CHECK_PRELOCK(temp)) {
+	if (!args->is_abort && (!PR_CHECK_PRELOCK(temp) || PR_GET_OWNER(temp) == args->tid)) {
 		// ------------------------------------------------------------------------
 		// if (PR_THREAD_IDX == 405) printf("[405] did not abort yet!\n");
 		// not locked
@@ -122,7 +122,7 @@ PR_DEVICE void PR_i_openWriteKernel(
 	int temp, version;
 
 	temp = PR_GET_MTX(args->mtx, addr);
-	if (!args->is_abort && !PR_CHECK_PRELOCK(temp)) {
+	if (!args->is_abort && (!PR_CHECK_PRELOCK(temp) || PR_GET_OWNER(temp) == args->tid)) {
 		// ------------------------------------------------------------------------
 		// // not locked --> safe to access TODO: the rset seems redundant
 		// TODO: non-repeated writes
@@ -224,7 +224,7 @@ PR_i_validateKernel(PR_args_s *args)
 
 	for (i = 0; i < args->wset.size; i++) {
 		retry_cnt=0;
-		while (1) {
+		while (retry_cnt < 1000) {
 			// spin until this thread can lock one account in write set
 			
 			lock = (int*) &(PR_GET_MTX(args->mtx, args->wset.addrs[i]));
@@ -274,7 +274,27 @@ PR_i_validateKernel(PR_args_s *args)
 //			) break;
 
 			retry_cnt++;
-
+			if (retry_cnt > 100) {
+				__threadfence();
+#if __CUDA_ARCH__ >= 700
+				__syncwarp();
+#endif
+			}
+		}
+		if (retry_cnt >= 1000) {
+			// failed to lock within 1000 retries --> unlock and abort
+			for (k = 0; k < i; k++) {
+				old_lock = (int*) &(PR_GET_MTX(args->mtx, args->wset.addrs[k]));
+				oval = *old_lock;
+				isPreLocked = PR_CHECK_PRELOCK(oval);
+				ownerIsSelf = PR_GET_OWNER(oval) == tid;
+				if (isPreLocked && ownerIsSelf) {
+					nval = oval & PR_MASK_VERSION;
+					atomicCAS(old_lock, oval, nval);
+				}
+			}
+			args->is_abort = 1;
+			return;
 		}
 	}
 
