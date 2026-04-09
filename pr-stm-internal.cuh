@@ -150,7 +150,7 @@ PR_DEVICE void PR_i_openWriteKernel(
 		// ------------------------------------------------------------------------
 		} else {
 			// update the write-set
-			PR_RWSET_SET_VAL(args->wset, j, wbuf);
+			PR_RWSET_SET_VAL(args->wset, k, wbuf);
 		}
 		// ------------------------------------------------------------------------
 	} else {
@@ -224,7 +224,7 @@ PR_i_validateKernel(PR_args_s *args)
 
 	for (i = 0; i < args->wset.size; i++) {
 		retry_cnt=0;
-		while (1) {
+		while (retry_cnt < 1000) {
 			// spin until this thread can lock one account in write set
 			
 			lock = (int*) &(PR_GET_MTX(args->mtx, args->wset.addrs[i]));
@@ -264,11 +264,8 @@ PR_i_validateKernel(PR_args_s *args)
 
 			// atomic lock that account
 			if (atomicCAS(lock, lval, new_lock) == lval){
-				printf("t%d won prelock cas on %d\n", tid, args->wset.addrs[i]);
 				break;
 			}
-			else
-				printf("t%d lost prelock cas on %d\n", tid, args->wset.addrs[i]);
 //			if(__nv_atomic_compare_exchange_n(
 //                    lock,
 //                    &lval, new_lock, /* ignored */ false,
@@ -277,7 +274,27 @@ PR_i_validateKernel(PR_args_s *args)
 //			) break;
 
 			retry_cnt++;
-
+			if (retry_cnt > 100) {
+				__threadfence();
+#if __CUDA_ARCH__ >= 700
+				__syncwarp();
+#endif
+			}
+		}
+		if (retry_cnt >= 1000) {
+			// failed to lock within 1000 retries --> unlock and abort
+			for (k = 0; k < i; k++) {
+				old_lock = (int*) &(PR_GET_MTX(args->mtx, args->wset.addrs[k]));
+				oval = *old_lock;
+				isPreLocked = PR_CHECK_PRELOCK(oval);
+				ownerIsSelf = PR_GET_OWNER(oval) == tid;
+				if (isPreLocked && ownerIsSelf) {
+					nval = oval & PR_MASK_VERSION;
+					atomicCAS(old_lock, oval, nval);
+				}
+			}
+			args->is_abort = 1;
+			return;
 		}
 	}
 
@@ -293,11 +310,9 @@ PR_i_validateKernel(PR_args_s *args)
 		if (ownerIsSelf) {
 			new_lock = PR_LOCK_VAL(args->wset.versions[i], tid); // temp final lock
 			if (atomicCAS(lock, lval, new_lock) == lval) {
-				printf("t%d won lock cas on %d\n", tid, args->wset.addrs[i]);
 				vw++;	// if succeed, vw++
 			} else {
 				// failed to lock
-				printf("t%d lost lock cas on %d\n", tid, args->wset.addrs[i]);
 				PR_i_unlockWset(args);
 				args->is_abort = 1;
 				return;
